@@ -288,3 +288,288 @@ class TestRoundtripPropertyStore:
         assert len(info.property_stores) == 2
         assert info.property_stores[0].format_name == "SID_SPS_METADATA"
         assert info.property_stores[1].format_name == "SID_SPS_METADATA2"
+
+
+# ---- v10.0 Gap Fix Roundtrip Tests ----
+
+
+class TestRoundtripDarwinDataBlock:
+    """GAP-2: DarwinDataBlock survives a round trip."""
+
+    def test_darwin_data_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", darwin_data="TestMSIApp-v2")
+        info = parse_lnk(data)
+        assert info.darwin_data_ansi == "TestMSIApp-v2"
+        assert info.darwin_data_unicode == "TestMSIApp-v2"
+
+    def test_darwin_has_darwin_id_flag(self):
+        import struct
+
+        data = build_lnk(target=r"C:\t.exe", darwin_data="AppID")
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x00001000  # HasDarwinID
+
+
+class TestRoundtripConsoleFEDataBlock:
+    """GAP-4: ConsoleFEDataBlock survives a round trip."""
+
+    def test_codepage_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", console_fe_codepage=65001)
+        info = parse_lnk(data)
+        assert info.console_fe_codepage == 65001
+
+    def test_codepage_932(self):
+        data = build_lnk(target=r"C:\t.exe", console_fe_codepage=932)
+        info = parse_lnk(data)
+        assert info.console_fe_codepage == 932
+
+
+class TestRoundtripShimDataBlock:
+    """GAP-5: ShimDataBlock survives a round trip."""
+
+    def test_shim_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", shim_layer_name="WinXPSP3")
+        info = parse_lnk(data)
+        assert info.shim_layer_name == "WinXPSP3"
+
+    def test_shim_run_with_shim_flag(self):
+        import struct
+
+        data = build_lnk(target=r"C:\t.exe", shim_layer_name="Win7RTM")
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x00020000  # RunWithShimLayer
+
+
+class TestRoundtripConsoleDataBlock:
+    """GAP-3: ConsoleDataBlock survives a round trip."""
+
+    def test_console_window_size_roundtrip(self):
+        console = {"window_size_x": 132, "window_size_y": 43}
+        data = build_lnk(target=r"C:\t.exe", console_data=console)
+        info = parse_lnk(data)
+        assert info.console_data["window_size_x"] == 132
+        assert info.console_data["window_size_y"] == 43
+
+    def test_console_face_name_roundtrip(self):
+        console = {"face_name": "Cascadia Code"}
+        data = build_lnk(target=r"C:\t.exe", console_data=console)
+        info = parse_lnk(data)
+        assert info.console_data["face_name"] == "Cascadia Code"
+
+    def test_console_defaults_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", console_data={})
+        info = parse_lnk(data)
+        assert info.console_data["screen_buffer_size_x"] == 80
+        assert info.console_data["screen_buffer_size_y"] == 300
+        assert info.console_data["cursor_size"] == 25
+
+
+class TestRoundtripSpecialFolderDataBlock:
+    """GAP-6: SpecialFolderDataBlock survives a round trip."""
+
+    def test_special_folder_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe", special_folder_id=0x25, special_folder_offset=0x14
+        )
+        info = parse_lnk(data)
+        assert info.special_folder_id == 0x25
+        assert info.special_folder_offset == 0x14
+
+
+class TestRoundtripFileAttributes:
+    """GAP-8: file_attributes parameter round trip."""
+
+    def test_custom_attrs_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", file_attributes=0x22)
+        info = parse_lnk(data)
+        assert info.file_attributes == 0x22
+
+
+class TestRoundtripLinkFlags:
+    """GAP-7: Additional link_flags round trip."""
+
+    def test_extra_flags_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", link_flags=0x00040000)
+        info = parse_lnk(data)
+        assert info.flags & 0x00040000  # ForceNoLinkTrack
+        assert "ForceNoLinkTrack" in info.flag_names
+
+
+class TestRoundtripTimestamps:
+    """GAP-B: Custom timestamps survive a round trip."""
+
+    def test_datetime_timestamps(self):
+        from datetime import UTC, datetime
+
+        ts = datetime(2020, 6, 15, 12, 30, 0, tzinfo=UTC)
+        data = build_lnk(
+            target=r"C:\t.exe",
+            creation_time=ts,
+            access_time=ts,
+            write_time=ts,
+        )
+        info = parse_lnk(data)
+        assert info.creation_time == "2020-06-15 12:30:00 UTC"
+        assert info.access_time == "2020-06-15 12:30:00 UTC"
+        assert info.write_time == "2020-06-15 12:30:00 UTC"
+
+    def test_int_filetime_ticks(self):
+        # 2020-01-01 00:00:00 UTC = 132223104000000000 ticks
+        ticks = 132223104000000000
+        data = build_lnk(target=r"C:\t.exe", creation_time=ticks)
+        info = parse_lnk(data)
+        assert info.creation_time == "2020-01-01 00:00:00 UTC"
+
+    def test_none_uses_current_time(self):
+        data = build_lnk(target=r"C:\t.exe")
+        info = parse_lnk(data)
+        # Default should produce a recent timestamp, not "0 (unset)"
+        assert "UTC" in info.creation_time
+        assert "unset" not in info.creation_time
+
+    def test_independent_timestamps(self):
+        from datetime import UTC, datetime
+
+        t1 = datetime(2019, 1, 1, 0, 0, 0, tzinfo=UTC)
+        t2 = datetime(2021, 6, 15, 0, 0, 0, tzinfo=UTC)
+        t3 = datetime(2023, 12, 31, 23, 59, 58, tzinfo=UTC)
+        data = build_lnk(
+            target=r"C:\t.exe",
+            creation_time=t1,
+            access_time=t2,
+            write_time=t3,
+        )
+        info = parse_lnk(data)
+        assert "2019-01-01" in info.creation_time
+        assert "2021-06-15" in info.access_time
+        assert "2023-12-31" in info.write_time
+
+
+class TestRoundtripVolumeMetadata:
+    """GAP-C/D: Volume metadata parameters survive a round trip."""
+
+    def test_volume_label_ascii(self):
+        data = build_lnk(target=r"C:\t.exe", volume_label="SYSTEM")
+        info = parse_lnk(data)
+        assert info.volume_label == "SYSTEM"
+
+    def test_drive_serial(self):
+        data = build_lnk(target=r"C:\t.exe", drive_serial=0xDEADBEEF)
+        info = parse_lnk(data)
+        assert info.drive_serial == 0xDEADBEEF
+
+    def test_drive_type_removable(self):
+        data = build_lnk(target=r"C:\t.exe", drive_type=2)
+        info = parse_lnk(data)
+        assert info.drive_type == 2
+        assert info.drive_type_name == "REMOVABLE"
+
+    def test_drive_type_cdrom(self):
+        data = build_lnk(target=r"D:\setup.exe", drive_type=5)
+        info = parse_lnk(data)
+        assert info.drive_type == 5
+        assert info.drive_type_name == "CDROM"
+
+    def test_all_volume_fields(self):
+        data = build_lnk(
+            target=r"E:\data.bin",
+            volume_label="BACKUP",
+            drive_serial=0x12345678,
+            drive_type=2,
+        )
+        info = parse_lnk(data)
+        assert info.volume_label == "BACKUP"
+        assert info.drive_serial == 0x12345678
+        assert info.drive_type == 2
+
+
+class TestRoundtripCNR:
+    """GAP-E/F/G: CNR Unicode, device name, and provider type."""
+
+    def test_unc_with_device_name(self):
+        data = build_lnk(
+            target=r"\\server\share\file.txt",
+            network_device_name="Z:",
+        )
+        info = parse_lnk(data)
+        assert info.network_share_name == r"\\server\share"
+        assert info.device_name == "Z:"
+        assert info.target_path == r"\\server\share\file.txt"
+
+    def test_unc_with_custom_provider_type(self):
+        data = build_lnk(
+            target=r"\\webdav\docs\report.pdf",
+            network_provider_type=0x002E0000,  # WNNC_NET_DAV
+        )
+        info = parse_lnk(data)
+        assert info.network_provider_type == 0x002E0000
+        assert info.network_provider_name == "WNNC_NET_DAV"
+
+    def test_unc_unicode_share_name(self):
+        data = build_lnk(target=r"\\server\share\file.txt")
+        info = parse_lnk(data)
+        # Unicode variant should now be parsed (NetNameOffset > 0x14)
+        assert info.network_share_name == r"\\server\share"
+
+    def test_unc_device_and_provider(self):
+        data = build_lnk(
+            target=r"\\nas\backup\data.zip",
+            network_device_name="M:",
+            network_provider_type=0x00020000,  # WNNC_NET_LANMAN
+        )
+        info = parse_lnk(data)
+        assert info.device_name == "M:"
+        assert info.network_provider_name == "WNNC_NET_LANMAN"
+        assert info.target_path == r"\\nas\backup\data.zip"
+
+
+class TestRoundtripPropertyTypes:
+    """GAP-J: VT_I2 and VT_LPSTR property types survive round trip."""
+
+    def test_vt_i2_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            property_stores=[
+                {
+                    "format_id": "{B9B4B3FC-2B51-4A42-B5D8-324146AFCF25}",
+                    "properties": [
+                        {"id": 10, "type": 0x0002, "value": -42},
+                    ],
+                }
+            ],
+        )
+        info = parse_lnk(data)
+        prop = info.property_stores[0].properties[0]
+        assert prop.type == 0x0002
+        assert prop.value == -42
+
+    def test_vt_lpstr_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            property_stores=[
+                {
+                    "format_id": "{B9B4B3FC-2B51-4A42-B5D8-324146AFCF25}",
+                    "properties": [
+                        {"id": 11, "type": 0x001E, "value": "hello ansi"},
+                    ],
+                }
+            ],
+        )
+        info = parse_lnk(data)
+        prop = info.property_stores[0].properties[0]
+        assert prop.type == 0x001E
+        assert prop.value == "hello ansi"
+
+
+class TestShowCommandValidation:
+    """GAP-L: ShowCommand validation in builder."""
+
+    def test_valid_show_commands_accepted(self):
+        for cmd in (1, 3, 7):
+            build_lnk(target=r"C:\t.exe", show_command=cmd)
+
+    def test_invalid_show_command_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid show_command"):
+            build_lnk(target=r"C:\t.exe", show_command=99)

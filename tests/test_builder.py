@@ -237,3 +237,183 @@ class TestUnicodeLinkInfo:
 
         info = parse_lnk(simple_lnk_bytes)
         assert info.target_path == r"C:\Windows\notepad.exe"
+
+
+# ---- v10.0 Gap Fix Tests ----
+
+
+class TestStringDataLengthLimit:
+    """GAP-1: v10.0 StringData 260-character limit enforcement."""
+
+    def test_description_at_limit_succeeds(self):
+        from lnksmith.parser import parse_lnk
+
+        desc = "A" * 260
+        data = build_lnk(target=r"C:\t.exe", description=desc)
+        info = parse_lnk(data)
+        assert info.description == desc
+
+    def test_description_over_limit_raises(self):
+        desc = "A" * 261
+        with pytest.raises(ValueError, match="260-character limit"):
+            build_lnk(target=r"C:\t.exe", description=desc)
+
+    def test_relative_path_over_limit_raises(self):
+        rp = "A" * 261
+        with pytest.raises(ValueError, match="260-character limit"):
+            build_lnk(target=r"C:\t.exe", relative_path=rp)
+
+    def test_working_dir_over_limit_raises(self):
+        wd = "A" * 261
+        with pytest.raises(ValueError, match="260-character limit"):
+            build_lnk(target=r"C:\t.exe", working_dir=wd)
+
+    def test_icon_location_over_limit_raises(self):
+        il = "A" * 261
+        with pytest.raises(ValueError, match="260-character limit"):
+            build_lnk(target=r"C:\t.exe", icon_location=il)
+
+    def test_arguments_over_limit_succeeds(self):
+        """COMMAND_LINE_ARGUMENTS is unbounded per spec."""
+        from lnksmith.parser import parse_lnk
+
+        args = "A" * 1000
+        data = build_lnk(target=r"C:\t.exe", arguments=args)
+        info = parse_lnk(data)
+        assert info.arguments == args
+
+
+class TestFileAttributesParam:
+    """GAP-8: file_attributes parameter in builder."""
+
+    def test_default_is_archive(self):
+        data = build_lnk(target=r"C:\t.exe")
+        attrs = struct.unpack_from("<I", data, 24)[0]
+        assert attrs == 0x20
+
+    def test_custom_attributes(self):
+        data = build_lnk(target=r"C:\t.exe", file_attributes=0x22)
+        attrs = struct.unpack_from("<I", data, 24)[0]
+        assert attrs == 0x22
+
+    def test_hidden_system(self):
+        data = build_lnk(target=r"C:\t.exe", file_attributes=0x06)
+        attrs = struct.unpack_from("<I", data, 24)[0]
+        assert attrs == 0x06
+
+
+class TestLinkFlagsParam:
+    """GAP-7: Additional link_flags parameter in builder."""
+
+    def test_extra_flags_merged(self):
+        data = build_lnk(target=r"C:\t.exe", link_flags=0x00040000)
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x00040000  # ForceNoLinkTrack
+
+    def test_auto_flags_preserved(self):
+        data = build_lnk(target=r"C:\t.exe", description="test", link_flags=0x00040000)
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x04  # HasName (auto)
+        assert flags & 0x00040000  # ForceNoLinkTrack (manual)
+
+
+class TestDarwinDataBlockBuilder:
+    """GAP-2: DarwinDataBlock builder."""
+
+    def test_darwin_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", darwin_data="TestApp-1234")
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000006 in sigs
+
+    def test_darwin_block_size(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", darwin_data="TestApp-1234")
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000006)
+        assert block.size == 788
+
+    def test_darwin_sets_flag(self):
+        data = build_lnk(target=r"C:\t.exe", darwin_data="TestApp")
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x00001000  # HasDarwinID
+
+
+class TestConsoleFEDataBlockBuilder:
+    """GAP-4: ConsoleFEDataBlock builder."""
+
+    def test_console_fe_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", console_fe_codepage=65001)
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000004 in sigs
+
+    def test_console_fe_block_size(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", console_fe_codepage=65001)
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000004)
+        assert block.size == 12
+
+
+class TestShimDataBlockBuilder:
+    """GAP-5: ShimDataBlock builder."""
+
+    def test_shim_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", shim_layer_name="WinXPSP3")
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000008 in sigs
+
+    def test_shim_sets_flag(self):
+        data = build_lnk(target=r"C:\t.exe", shim_layer_name="Win7RTM")
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x00020000  # RunWithShimLayer
+
+
+class TestConsoleDataBlockBuilder:
+    """GAP-3: ConsoleDataBlock builder."""
+
+    def test_console_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", console_data={"window_size_x": 120})
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000002 in sigs
+
+    def test_console_block_size(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", console_data={})
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000002)
+        assert block.size == 0xCC  # 204 bytes
+
+
+class TestSpecialFolderDataBlockBuilder:
+    """GAP-6: SpecialFolderDataBlock builder."""
+
+    def test_special_folder_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", special_folder_id=0x25)
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000005 in sigs
+
+    def test_special_folder_block_size(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", special_folder_id=0x25)
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000005)
+        assert block.size == 16

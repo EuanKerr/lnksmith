@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
     hooks:
       - id: fix-byte-order-marker
       - id: check-yaml
@@ -13,7 +13,7 @@ repos:
       - id: check-merge-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.2
+    rev: 0839f92796ae388643a08a21640a029b322be5c2 # v0.15.2
     hooks:
       - id: ruff
         args: [--fix]

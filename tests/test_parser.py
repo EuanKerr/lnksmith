@@ -302,3 +302,313 @@ class TestFormatLnkExtended:
         info = parse_lnk(vista_idlist_lnk_bytes)
         text = format_lnk(info)
         assert "VISTA AND ABOVE ID LIST" in text
+
+
+# ---- v10.0 Gap Fix Parser Tests ----
+
+
+class TestShowCommandNormalization:
+    """GAP-12: Unknown ShowCommand values normalized to SW_SHOWNORMAL."""
+
+    def test_unknown_show_command_normalized(self):
+        import struct
+
+        from lnksmith.builder import build_lnk
+
+        data = bytearray(build_lnk(target=r"C:\t.exe"))
+        # Patch ShowCommand at offset 60 to an unknown value (99)
+        struct.pack_into("<I", data, 60, 99)
+        info = parse_lnk(bytes(data))
+        assert info.show_command == 1  # normalized to SW_SHOWNORMAL
+        assert info.show_command_name == "SW_SHOWNORMAL"
+
+    def test_valid_show_commands_unchanged(self):
+        from lnksmith.builder import build_lnk
+
+        for cmd in (1, 3, 7):
+            data = build_lnk(target=r"C:\t.exe", show_command=cmd)
+            info = parse_lnk(data)
+            assert info.show_command == cmd
+
+
+class TestReservedFieldValidation:
+    """GAP-11: Reserved header fields MUST be zero."""
+
+    def test_nonzero_reserved_warns(self):
+        import struct
+        import warnings
+
+        from lnksmith.builder import build_lnk
+
+        data = bytearray(build_lnk(target=r"C:\t.exe"))
+        # Patch Reserved1 (offset 66) to a non-zero value
+        struct.pack_into("<H", data, 66, 0xBEEF)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            parse_lnk(bytes(data))
+            assert any("Reserved" in str(warning.message) for warning in w)
+
+    def test_zero_reserved_no_warning(self):
+        import warnings
+
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            parse_lnk(data)
+            assert not any("Reserved" in str(warning.message) for warning in w)
+
+
+class TestParseDarwinDataBlock:
+    """GAP-2: DarwinDataBlock parsing."""
+
+    def test_darwin_data_parsed(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", darwin_data="MSI-App-ID-12345")
+        info = parse_lnk(data)
+        assert info.darwin_data_ansi == "MSI-App-ID-12345"
+        assert info.darwin_data_unicode == "MSI-App-ID-12345"
+
+    def test_darwin_in_extra_blocks(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", darwin_data="TestApp")
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000006)
+        assert block.name == "DarwinDataBlock"
+        assert block.data["DarwinDataAnsi"] == "TestApp"
+
+
+class TestParseConsoleDataBlock:
+    """GAP-3: ConsoleDataBlock parsing."""
+
+    def test_console_data_parsed(self):
+        from lnksmith.builder import build_lnk
+
+        console = {
+            "window_size_x": 120,
+            "window_size_y": 50,
+            "face_name": "Consolas",
+            "font_weight": 400,
+        }
+        data = build_lnk(target=r"C:\t.exe", console_data=console)
+        info = parse_lnk(data)
+        assert info.console_data["window_size_x"] == 120
+        assert info.console_data["window_size_y"] == 50
+        assert info.console_data["face_name"] == "Consolas"
+        assert info.console_data["font_weight"] == 400
+
+    def test_console_color_table(self):
+        from lnksmith.builder import build_lnk
+
+        colors = [0x000000, 0x800000, 0x008000] + [0] * 13
+        data = build_lnk(target=r"C:\t.exe", console_data={"color_table": colors})
+        info = parse_lnk(data)
+        assert info.console_data["color_table"][0] == 0x000000
+        assert info.console_data["color_table"][1] == 0x800000
+        assert info.console_data["color_table"][2] == 0x008000
+
+
+class TestParseConsoleFEDataBlock:
+    """GAP-4: ConsoleFEDataBlock parsing."""
+
+    def test_console_fe_codepage(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", console_fe_codepage=65001)
+        info = parse_lnk(data)
+        assert info.console_fe_codepage == 65001
+
+    def test_console_fe_in_extra_blocks(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", console_fe_codepage=932)
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000004)
+        assert block.data["CodePage"] == "932"
+
+
+class TestParseShimDataBlock:
+    """GAP-5: ShimDataBlock parsing."""
+
+    def test_shim_layer_name(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", shim_layer_name="WinXPSP3")
+        info = parse_lnk(data)
+        assert info.shim_layer_name == "WinXPSP3"
+
+    def test_shim_in_extra_blocks(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", shim_layer_name="Win7RTM")
+        info = parse_lnk(data)
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000008)
+        assert block.data["LayerName"] == "Win7RTM"
+
+
+class TestParseSpecialFolderDataBlock:
+    """GAP-6: SpecialFolderDataBlock parsing with promoted fields."""
+
+    def test_special_folder_id_promoted(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe", special_folder_id=0x25, special_folder_offset=0x20
+        )
+        info = parse_lnk(data)
+        assert info.special_folder_id == 0x25
+        assert info.special_folder_offset == 0x20
+
+
+class TestParseWNNCNetTypes:
+    """GAP-9: Verify complete WNNC_NET_TYPES lookup."""
+
+    def test_new_net_types_present(self):
+        from lnksmith._constants import WNNC_NET_TYPES
+
+        # Spot-check some of the newly added types
+        assert 0x002E0000 in WNNC_NET_TYPES  # WNNC_NET_DAV
+        assert WNNC_NET_TYPES[0x002E0000] == "WNNC_NET_DAV"
+        assert 0x00430000 in WNNC_NET_TYPES  # WNNC_NET_GOOGLE
+        assert WNNC_NET_TYPES[0x00430000] == "WNNC_NET_GOOGLE"
+        assert 0x003F0000 in WNNC_NET_TYPES  # WNNC_NET_VMWARE
+        assert WNNC_NET_TYPES[0x003F0000] == "WNNC_NET_VMWARE"
+
+
+class TestParseVKCodes:
+    """GAP-10: Verify VK_NUMLOCK and VK_SCROLL in lookup."""
+
+    def test_vk_numlock(self):
+        from lnksmith._constants import VK_KEYS
+
+        assert 0x90 in VK_KEYS
+        assert VK_KEYS[0x90] == "NUM LOCK"
+
+    def test_vk_scroll_lock(self):
+        from lnksmith._constants import VK_KEYS
+
+        assert 0x91 in VK_KEYS
+        assert VK_KEYS[0x91] == "SCROLL LOCK"
+
+
+class TestForceNoLinkInfo:
+    """GAP-A: ForceNoLinkInfo (bit 8) causes LinkInfo to be ignored."""
+
+    def test_linkinfo_discarded_when_force_no_linkinfo(self):
+        from lnksmith.builder import build_lnk
+
+        # Build with ForceNoLinkInfo flag (0x100) merged in
+        data = build_lnk(target=r"C:\Windows\notepad.exe", link_flags=0x100)
+        info = parse_lnk(data)
+        assert info.flags & 0x100  # ForceNoLinkInfo set
+        # LinkInfo fields must be cleared despite binary data being present
+        assert info.local_base_path == ""
+        assert info.volume_label == ""
+        assert info.drive_type == 0
+        assert info.drive_serial == 0
+        assert info.common_path == ""
+        assert info.target_path == ""
+
+    def test_stringdata_still_parsed_with_force_no_linkinfo(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(
+            target=r"C:\Windows\notepad.exe",
+            description="test desc",
+            arguments="--test",
+            link_flags=0x100,
+        )
+        info = parse_lnk(data)
+        # StringData and other sections should still work
+        assert info.description == "test desc"
+        assert info.arguments == "--test"
+
+    def test_unc_linkinfo_discarded_when_force_no_linkinfo(self):
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"\\server\share\file.txt", link_flags=0x100)
+        info = parse_lnk(data)
+        assert info.network_share_name == ""
+        assert info.network_provider_type == 0
+        assert info.device_name == ""
+        assert info.target_path == ""
+
+
+class TestTrackerDataBlockValidation:
+    """GAP-H: TrackerDataBlock Length and Version validation."""
+
+    def test_valid_tracker_no_warning(self):
+        import warnings
+
+        from lnksmith.builder import build_lnk
+
+        data = build_lnk(target=r"C:\t.exe", tracker_machine_id="TEST")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            parse_lnk(data)
+            tracker_warnings = [x for x in w if "TrackerDataBlock" in str(x.message)]
+            assert len(tracker_warnings) == 0
+
+    def test_bad_tracker_length_warns(self):
+        import struct
+        import warnings
+
+        from lnksmith.builder import build_lnk
+
+        data = bytearray(build_lnk(target=r"C:\t.exe", tracker_machine_id="TEST"))
+        # Find the tracker block (sig 0xA0000003) and patch Length at +8
+        for i in range(76, len(data) - 8):
+            if struct.unpack_from("<I", data, i + 4)[0] == 0xA0000003:
+                struct.pack_into("<I", data, i + 8, 0x99)  # bad Length
+                break
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            parse_lnk(bytes(data))
+            assert any("TrackerDataBlock Length" in str(x.message) for x in w)
+
+    def test_bad_tracker_version_warns(self):
+        import struct
+        import warnings
+
+        from lnksmith.builder import build_lnk
+
+        data = bytearray(build_lnk(target=r"C:\t.exe", tracker_machine_id="TEST"))
+        for i in range(76, len(data) - 8):
+            if struct.unpack_from("<I", data, i + 4)[0] == 0xA0000003:
+                struct.pack_into("<I", data, i + 12, 5)  # bad Version
+                break
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            parse_lnk(bytes(data))
+            assert any("TrackerDataBlock Version" in str(x.message) for x in w)
+
+
+class TestShimDataBlockValidation:
+    """GAP-I: ShimDataBlock minimum size validation."""
+
+    def test_undersized_shim_warns(self):
+        import struct
+        import warnings
+
+        from lnksmith.builder import build_lnk
+
+        data = bytearray(build_lnk(target=r"C:\t.exe", shim_layer_name="XP"))
+        # Builder now correctly pads to 0x88. Manually shrink the block
+        # to simulate a malformed file and verify the parser warns.
+        sig_bytes = struct.pack("<I", 0xA0000008)
+        idx = data.index(sig_bytes)
+        block_start = idx - 4  # size field is 4 bytes before signature
+        old_size = struct.unpack_from("<I", data, block_start)[0]
+        # Replace with a minimal undersized block: 8-byte header + "XP" UTF-16LE + null
+        shim_payload = "XP".encode("utf-16-le") + b"\x00\x00"
+        new_size = 8 + len(shim_payload)  # 14 bytes, well under 0x88
+        new_block = struct.pack("<II", new_size, 0xA0000008) + shim_payload
+        # Replace old block (keep terminal dword intact after it)
+        data[block_start : block_start + old_size] = new_block
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            parse_lnk(bytes(data))
+            assert any("ShimDataBlock BlockSize" in str(x.message) for x in w)

@@ -1,22 +1,32 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
 name = "lnksmith"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Build and parse Windows .lnk files (MS-SHLLINK) -- pure Python, zero dependencies"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 authors = [{ name = "EuanKerr" }]
+keywords = ["lnk", "shortcut", "windows", "shllink", "shell-link"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Filesystems",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
 ]
 
 [project.urls]
@@ -29,6 +39,9 @@ dev = ["pytest", "pytest-cov", "ruff", "pre-commit"]
 
 [project.scripts]
 lnksmith = "lnksmith.cli:main"
+
+[tool.hatch.version]
+path = "src/lnksmith/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lnksmith"]
