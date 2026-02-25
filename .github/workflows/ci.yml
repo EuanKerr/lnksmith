@@ -36,11 +36,12 @@ jobs:
           import sys, xml.etree.ElementTree as ET
           tree = ET.parse(sys.argv[1])
           root = tree.getroot()
-          ts = root.get("tests", "0")
-          fails = root.get("failures", "0")
-          errs = root.get("errors", "0")
-          skip = root.get("skipped", "0")
-          t = root.get("time", "?")
+          suite = root.find("testsuite") if root.tag == "testsuites" else root
+          ts = suite.get("tests", "0")
+          fails = suite.get("failures", "0")
+          errs = suite.get("errors", "0")
+          skip = suite.get("skipped", "0")
+          t = suite.get("time", "?")
           print("## Test Results\n")
           print(f"| Metric | Count |")
           print(f"|--------|-------|")
