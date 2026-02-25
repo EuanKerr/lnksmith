@@ -19,7 +19,7 @@ jobs:
 
       - run: uv python install 3.14
 
-      - run: uv pip install -e ".[dev]" --system
+      - run: uv venv && uv pip install -e ".[dev]"
 
       - name: Run tests with coverage
         run: >-
@@ -31,6 +31,7 @@ jobs:
       - name: Test summary
         if: always()
         run: |
+          [ -f TestResults/results.xml ] || exit 0
           python3 - TestResults/results.xml >> "$GITHUB_STEP_SUMMARY" << 'PYEOF'
           import sys, xml.etree.ElementTree as ET
           tree = ET.parse(sys.argv[1])
@@ -53,6 +54,7 @@ jobs:
       - name: Coverage summary
         if: always()
         run: |
+          [ -f coverage.xml ] || exit 0
           python3 - coverage.xml >> "$GITHUB_STEP_SUMMARY" << 'PYEOF'
           import sys, xml.etree.ElementTree as ET
           tree = ET.parse(sys.argv[1])
