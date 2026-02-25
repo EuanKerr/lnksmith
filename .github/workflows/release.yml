@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v7
 
@@ -20,10 +22,52 @@ jobs:
 
       - run: uv build
 
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+
+          # Start building the notes file
+          cat > release-notes.md <<EOF
+          ## Install
+
+          \`\`\`
+          pip install lnksmith==${VERSION}
+          \`\`\`
+
+          ## What's in the release
+
+          | File | Size |
+          |------|------|
+          EOF
+
+          for f in dist/*; do
+            SIZE=$(du -h "$f" | cut -f1)
+            echo "| \`$(basename "$f")\` | ${SIZE} |" >> release-notes.md
+          done
+
+          echo "" >> release-notes.md
+
+          # Append auto-generated changelog from GitHub
+          if [ -n "$PREV_TAG" ]; then
+            gh api repos/{owner}/{repo}/releases/generate-notes \
+              -f tag_name="$TAG" \
+              -f previous_tag_name="$PREV_TAG" \
+              --jq '.body' >> release-notes.md
+          else
+            gh api repos/{owner}/{repo}/releases/generate-notes \
+              -f tag_name="$TAG" \
+              --jq '.body' >> release-notes.md
+          fi
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "${{ github.ref_name }}"
           dist/*
-          --generate-notes
+          --notes-file release-notes.md
