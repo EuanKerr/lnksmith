@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: fix-byte-order-marker
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.2
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: ascii-check
+        name: ASCII-only source files
+        entry: python -c "import sys; hits=[f'{f}:{i+1}' for f in sys.argv[1:] for i,l in enumerate(open(f,'rb')) if any(b>127 for b in l)]; hits and (print('\n'.join(hits)) or sys.exit(1))"
+        language: system
+        types_or: [python, markdown, toml, yaml]

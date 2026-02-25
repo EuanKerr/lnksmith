@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v7
+
+      - run: uv python install 3.14
+
+      - run: uv pip install -e ".[dev]" --system
+
+      - name: Run tests with coverage
+        run: >-
+          uv run pytest tests/ -v --tb=short
+          --junitxml=TestResults/results.xml
+          --cov=src/lnksmith
+          --cov-report=xml:coverage.xml
+
+      - name: Test summary
+        if: always()
+        run: |
+          python3 - TestResults/results.xml >> "$GITHUB_STEP_SUMMARY" << 'PYEOF'
+          import sys, xml.etree.ElementTree as ET
+          tree = ET.parse(sys.argv[1])
+          root = tree.getroot()
+          ts = root.get("tests", "0")
+          fails = root.get("failures", "0")
+          errs = root.get("errors", "0")
+          skip = root.get("skipped", "0")
+          t = root.get("time", "?")
+          print("## Test Results\n")
+          print(f"| Metric | Count |")
+          print(f"|--------|-------|")
+          print(f"| Passed | {int(ts) - int(fails) - int(errs) - int(skip)} |")
+          print(f"| Failed | {fails} |")
+          print(f"| Errors | {errs} |")
+          print(f"| Skipped | {skip} |")
+          print(f"| Duration | {t}s |")
+          PYEOF
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          python3 - coverage.xml >> "$GITHUB_STEP_SUMMARY" << 'PYEOF'
+          import sys, xml.etree.ElementTree as ET
+          tree = ET.parse(sys.argv[1])
+          root = tree.getroot()
+          rate = float(root.get("line-rate", "0"))
+          pct = f"{rate * 100:.1f}%"
+          print("\n## Code Coverage\n")
+          print(f"| Metric | Value |")
+          print(f"|--------|-------|")
+          print(f"| Line coverage | {pct} |")
+          for pkg in root.findall(".//package"):
+              name = pkg.get("name", "?")
+              lr = float(pkg.get("line-rate", "0"))
+              print(f"| {name} | {lr * 100:.1f}% |")
+          PYEOF

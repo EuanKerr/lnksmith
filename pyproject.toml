@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lnksmith"
+version = "0.1.0"
+description = "Build and parse Windows .lnk files (MS-SHLLINK) -- pure Python, zero dependencies"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+authors = [{ name = "EuanKerr" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Filesystems",
+]
+
+[project.urls]
+Homepage = "https://github.com/EuanKerr/lnksmith"
+Repository = "https://github.com/EuanKerr/lnksmith"
+Issues = "https://github.com/EuanKerr/lnksmith/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "pre-commit"]
+
+[project.scripts]
+lnksmith = "lnksmith.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lnksmith"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF100"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
