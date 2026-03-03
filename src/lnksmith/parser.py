@@ -196,6 +196,10 @@ class LnkInfo:
     # PropertyStoreDataBlock
     property_stores: list[PropertyStore] = field(default_factory=list)
 
+    # EnvironmentVariableDataBlock (promoted)
+    env_target_ansi: str = ""
+    env_target_unicode: str = ""
+
     # DarwinDataBlock
     darwin_data_ansi: str = ""
     darwin_data_unicode: str = ""
@@ -707,8 +711,11 @@ def parse_lnk(source: str | Path | bytes) -> LnkInfo:
                 .decode(ANSI_CODEPAGE, errors="replace")
             )
             block.data["TargetAnsi"] = ansi
+            info.env_target_ansi = ansi
             if block_size >= 788:
-                block.data["TargetUnicode"] = decode_utf16le_at(data, pos + 268, 520)
+                uni_str = decode_utf16le_at(data, pos + 268, 520)
+                block.data["TargetUnicode"] = uni_str
+                info.env_target_unicode = uni_str
 
         elif sig == 0xA0000007 and block_size >= 268:
             ansi = (
@@ -1002,5 +1009,8 @@ def format_lnk(info: LnkInfo) -> str:
     lines.append(f"  IconLocation:    {icon_display or '(empty)'}")
     lines.append(f"  Hotkey:          {info.hotkey_str or '(empty)'}")
     lines.append(f"  WindowStyle:     {info.show_command}")
+    if info.env_target_ansi or info.env_target_unicode:
+        lines.append(f"  EnvTargetAnsi:   {info.env_target_ansi or '(empty)'}")
+        lines.append(f"  EnvTargetUnicode: {info.env_target_unicode or '(empty)'}")
 
     return "\n".join(lines)

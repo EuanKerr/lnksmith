@@ -592,3 +592,92 @@ class TestShowCommandValidation:
 
         with pytest.raises(ValueError, match="Invalid show_command"):
             build_lnk(target=r"C:\t.exe", show_command=99)
+
+
+# ---- Beukema LNK spoofing roundtrip tests ----
+# Reference: https://www.wietzebeukema.nl/blog/trust-me-im-a-shortcut
+
+
+class TestRoundtripSplitEnvBlock:
+    """Split ANSI/Unicode EnvironmentVariableDataBlock roundtrip."""
+
+    def test_ansi_only_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_ansi=r"C:\Windows\System32\cmd.exe",
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == r"C:\Windows\System32\cmd.exe"
+        assert info.env_target_unicode == ""
+
+    def test_unicode_only_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_unicode=r"C:\Windows\System32\cmd.exe",
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == ""
+        assert info.env_target_unicode == r"C:\Windows\System32\cmd.exe"
+
+    def test_both_fields_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_ansi=r"C:\ansi\path.exe",
+            env_target_unicode=r"C:\unicode\path.exe",
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == r"C:\ansi\path.exe"
+        assert info.env_target_unicode == r"C:\unicode\path.exe"
+
+
+class TestRoundtripNullEnvBlock:
+    """Null EnvironmentVariableDataBlock roundtrip."""
+
+    def test_null_env_block_roundtrip(self):
+        data = build_lnk(target=r"C:\t.exe", null_env_block=True)
+        info = parse_lnk(data)
+        assert info.env_target_ansi == ""
+        assert info.env_target_unicode == ""
+        assert info.flags & 0x200  # HasExpString
+
+
+class TestRoundtripEnvTargetPathPromoted:
+    """Existing env_target_path promoted to env_target_ansi/unicode."""
+
+    def test_env_target_path_promotes_both_fields(self):
+        env = r"%WINDIR%\System32\cmd.exe"
+        data = build_lnk(target=r"C:\t.exe", env_target_path=env)
+        info = parse_lnk(data)
+        assert info.env_target_ansi == env
+        assert info.env_target_unicode == env
+
+
+class TestRoundtripForceAnsi:
+    """force_ansi StringData encoding roundtrip."""
+
+    def test_force_ansi_arguments_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            arguments="/c whoami",
+            force_ansi=True,
+        )
+        info = parse_lnk(data)
+        assert info.arguments == "/c whoami"
+
+    def test_force_ansi_description_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            description="Test App",
+            force_ansi=True,
+        )
+        info = parse_lnk(data)
+        assert info.description == "Test App"
+
+    def test_force_ansi_icon_location_roundtrip(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            icon_location=r"C:\icons\app.ico",
+            force_ansi=True,
+        )
+        info = parse_lnk(data)
+        assert "app.ico" in info.icon_location

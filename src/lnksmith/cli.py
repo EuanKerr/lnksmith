@@ -139,6 +139,8 @@ def _cmd_build(args: argparse.Namespace) -> None:
         "icon": "icon_location",
         "icon_env": "icon_env_path",
         "env_target": "env_target_path",
+        "env_target_ansi": "env_target_ansi",
+        "env_target_unicode": "env_target_unicode",
         "icon_index": "icon_index",
         "description": "description",
         "relative_path": "relative_path",
@@ -169,6 +171,20 @@ def _cmd_build(args: argparse.Namespace) -> None:
         if args.pad_args < 0:
             sys.exit("Error: --pad-args must be non-negative")
         cfg["pad_args"] = args.pad_args
+
+    # Pad character (with escape interpretation)
+    if args.pad_char is not None:
+        pc = args.pad_char
+        pc = pc.replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t")
+        cfg["pad_char"] = pc
+
+    # Null env block
+    if args.null_env_block:
+        cfg["null_env_block"] = True
+
+    # Force ANSI StringData
+    if args.force_ansi:
+        cfg["force_ansi"] = True
 
     # Binary padding
     if args.pad_size is not None:
@@ -277,6 +293,22 @@ def main(argv: list[str] | None = None) -> None:
     bp.add_argument("--icon", default=None, help="Icon source path (StringData)")
     bp.add_argument("--icon-env", default=None, help="Icon path with %%env%% vars")
     bp.add_argument("--env-target", default=None, help="Target path with %%env%% vars")
+    bp.add_argument(
+        "--env-target-ansi",
+        default=None,
+        help="ANSI-only EnvironmentVariableDataBlock target (Beukema Variant 4)",
+    )
+    bp.add_argument(
+        "--env-target-unicode",
+        default=None,
+        help="Unicode-only EnvironmentVariableDataBlock target",
+    )
+    bp.add_argument(
+        "--null-env-block",
+        action="store_true",
+        default=False,
+        help="Emit all-zeros EnvironmentVariableDataBlock (Beukema Variant 1)",
+    )
     bp.add_argument("--icon-index", type=int, default=None, help="Icon resource index")
     bp.add_argument("--description", default=None, help="Tooltip / comment text")
     bp.add_argument("--relative-path", default=None, help="Relative path to target")
@@ -323,7 +355,19 @@ def main(argv: list[str] | None = None) -> None:
         type=int,
         default=None,
         metavar="N",
-        help="Prepend N whitespace chars to arguments (ZDI-CAN-25373)",
+        help="Prepend N fill chars to arguments (ZDI-CAN-25373 / CVE-2025-9491)",
+    )
+    bp.add_argument(
+        "--pad-char",
+        default=None,
+        metavar="CHAR",
+        help="Fill character(s) for --pad-args (default: space; use \\n\\r for CVE-2025-9491)",
+    )
+    bp.add_argument(
+        "--force-ansi",
+        action="store_true",
+        default=False,
+        help="Suppress IsUnicode flag; encode StringData as cp1252",
     )
     bp.add_argument(
         "--pad-size",

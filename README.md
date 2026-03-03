@@ -181,9 +181,14 @@ print(asdict(info))
 ## Red Team Usage
 
 See [docs/redteam.md](docs/redteam.md) for offensive tradecraft patterns
-including argument padding (ZDI-CAN-25373), LOLBin proxy execution, LNK/HTA
-polyglots, binary padding, MotW bypass (CVE-2024-38217), NTLM hash theft,
-icon masquerading, tracker spoofing, and persistence techniques.
+including argument padding (ZDI-CAN-25373 / CVE-2025-9491), LOLBin proxy
+execution, LNK/HTA polyglots, binary padding, MotW bypass (CVE-2024-38217),
+NTLM hash theft, target path spoofing (Beukema Variants 0/1/4), icon
+masquerading, tracker spoofing, and persistence techniques.
+
+Target path spoofing techniques are based on Wietze Beukema's
+["Trust Me, I'm A Shortcut"](https://www.wietzebeukema.nl/blog/trust-me-im-a-shortcut)
+research and the [lnk-it-up](https://github.com/wietze/lnk-it-up) tool.
 
 ## License
 

