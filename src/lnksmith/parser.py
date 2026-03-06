@@ -340,10 +340,10 @@ def _parse_typed_value(data: bytes, off: int, end: int) -> tuple[object, int]:
         if val_off + 4 > end:
             return None, vtype
         return _read_i32(data, val_off), vtype
-    elif vtype == 0x0014:  # VT_UI8
+    elif vtype == 0x0014:  # VT_I8
         if val_off + 8 > end:
             return None, vtype
-        return struct.unpack_from("<Q", data, val_off)[0], vtype
+        return struct.unpack_from("<q", data, val_off)[0], vtype
     elif vtype == 0x000B:  # VT_BOOL
         if val_off + 2 > end:
             return None, vtype
